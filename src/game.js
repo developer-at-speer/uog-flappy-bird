@@ -16,6 +16,9 @@ var frameCount = 0;
 var points = 0;
 var gameOver = false;
 var started = false;
+var canvas = document.getElementById("game");
+var ctx = canvas.getContext("2d");
+var gameInterval = null;
 
 function startGame() {
   birdY = 300;
@@ -26,35 +29,37 @@ function startGame() {
   gameOver = false;
   started = true;
 
-  document.addEventListener("keydown", function (e) {
-    if (e.code == "Space") {
-      e.preventDefault();
-      spaceDown = true;
-      if (gameOver == true) {
-        startGame();
-      }
-    }
-  });
+  if (gameInterval === null) {
+    gameInterval = setInterval(gameLoop, 16);
+  }
+}
 
-  document.addEventListener("keyup", function (e) {
-    if (e.code == "Space") {
-      spaceDown = false;
-    }
-  });
-
-  document.getElementById("game").addEventListener("mousedown", function () {
+document.addEventListener("keydown", function (e) {
+  if (e.code == "Space") {
+    e.preventDefault();
     spaceDown = true;
     if (gameOver == true) {
       startGame();
     }
-  });
+  }
+});
 
-  document.getElementById("game").addEventListener("mouseup", function () {
+document.addEventListener("keyup", function (e) {
+  if (e.code == "Space") {
     spaceDown = false;
-  });
+  }
+});
 
-  setInterval(gameLoop, 16);
-}
+canvas.addEventListener("mousedown", function () {
+  spaceDown = true;
+  if (gameOver == true) {
+    startGame();
+  }
+});
+
+canvas.addEventListener("mouseup", function () {
+  spaceDown = false;
+});
 
 function gameLoop() {
   update();
@@ -83,7 +88,6 @@ function update() {
 
   frameCount = frameCount + 1;
   if (frameCount % 90 == 0) {
-    var canvas = document.getElementById("game");
     var topHeight = Math.floor(Math.random() * (canvas.height - pipeGap - 100)) + 50;
     pipes.push({
       x: canvas.width,
@@ -93,8 +97,11 @@ function update() {
     });
   }
 
-  for (var i = 0; i < pipes.length; i++) {
+  for (var i = pipes.length - 1; i >= 0; i--) {
     pipes[i].x = pipes[i].x - pipeSpeed;
+    if (pipes[i].x + pipeWidth < 0) {
+      pipes.splice(i, 1);
+    }
   }
 
   for (var i = 0; i < pipes.length; i++) {
@@ -112,10 +119,14 @@ function update() {
     }
   }
 
-  var canvas = document.getElementById("game");
   if (birdY + birdHeight > canvas.height || birdY < 0) {
     gameOver = true;
     console.log("Game over! Final points: " + points);
+  }
+
+  if (gameOver == true) {
+    clearInterval(gameInterval);
+    gameInterval = null;
   }
 }
 
@@ -129,20 +140,17 @@ function checkCollision(pipe) {
 }
 
 function draw() {
-  var canvas = document.getElementById("game");
-  var ctx = canvas.getContext("2d");
-
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 
   ctx.fillStyle = "#70c5ce";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
+  ctx.fillStyle = "green";
+  ctx.strokeStyle = "darkgreen";
+  ctx.lineWidth = 3;
   for (var i = 0; i < pipes.length; i++) {
-    ctx.fillStyle = "green";
     ctx.fillRect(pipes[i].x, 0, pipeWidth, pipes[i].top);
     ctx.fillRect(pipes[i].x, pipes[i].bottom, pipeWidth, canvas.height - pipes[i].bottom);
-    ctx.strokeStyle = "darkgreen";
-    ctx.lineWidth = 3;
     ctx.strokeRect(pipes[i].x, 0, pipeWidth, pipes[i].top);
     ctx.strokeRect(pipes[i].x, pipes[i].bottom, pipeWidth, canvas.height - pipes[i].bottom);
   }
