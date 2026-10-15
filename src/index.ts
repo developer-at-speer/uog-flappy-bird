@@ -1,7 +1,15 @@
 import { serve } from "bun";
 
 import index from "./index.html";
-import { getOrCreatePlayerFromRequest, getPlayerSummary, saveScoreForPlayer, withSessionCookie } from "./server/player";
+import {
+  createRecoveryCodeForPlayer,
+  createRunForPlayer,
+  getOrCreatePlayerFromRequest,
+  getPlayerSummary,
+  redeemRecoveryCode,
+  saveScoreForPlayer,
+  withSessionCookie,
+} from "./server/player";
 
 const server = serve({
   routes: {
@@ -22,7 +30,7 @@ const server = serve({
         const { player, token } = await getOrCreatePlayerFromRequest(req);
 
         try {
-          const body = (await req.json()) as { points?: number };
+          const body = (await req.json()) as { points?: number; runId?: string };
           const points = Number(body.points);
 
           if (!Number.isInteger(points) || points < 0 || points > 10000) {
@@ -32,7 +40,7 @@ const server = serve({
             );
           }
 
-          const summary = await saveScoreForPlayer(player.id, points);
+          const summary = await saveScoreForPlayer(player.id, points, body.runId ? { runId: body.runId } : {});
           const response = Response.json({
             highScore: summary.highScore,
           });
@@ -40,6 +48,59 @@ const server = serve({
           return withSessionCookie(response, token);
         } catch (error) {
           const message = error instanceof Error ? error.message : "Unable to save score";
+          return Response.json({ error: message }, { status: 400 });
+        }
+      },
+    },
+
+    "/api/runs": {
+      async POST(req) {
+        const { player, token } = await getOrCreatePlayerFromRequest(req);
+
+        try {
+          const run = await createRunForPlayer(player.id);
+          const response = Response.json({ runId: run.id, used: run.used });
+          return withSessionCookie(response, token);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unable to create run";
+          return Response.json({ error: message }, { status: 400 });
+        }
+      },
+    },
+
+    "/api/recovery": {
+      async POST(req) {
+        const { player, token } = await getOrCreatePlayerFromRequest(req);
+
+        try {
+          const code = await createRecoveryCodeForPlayer(player.id);
+          const response = Response.json({ code });
+          return withSessionCookie(response, token);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unable to create recovery code";
+          return Response.json({ error: message }, { status: 400 });
+        }
+      },
+    },
+
+    "/api/recovery/redeem": {
+      async POST(req) {
+        const { player, token } = await getOrCreatePlayerFromRequest(req);
+
+        try {
+          const body = (await req.json()) as { code?: string };
+          if (!body.code || !body.code.trim()) {
+            return Response.json({ error: "code is required" }, { status: 400 });
+          }
+
+          const result = await redeemRecoveryCode(player.id, body.code);
+          const response = Response.json({
+            playerId: result.playerId,
+            highScore: (await getPlayerSummary(result.playerId)).highScore,
+          });
+          return withSessionCookie(response, result.newToken);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unable to redeem recovery code";
           return Response.json({ error: message }, { status: 400 });
         }
       },

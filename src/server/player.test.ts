@@ -6,6 +6,10 @@ import {
   saveScoreForPlayer,
   ensurePlayerForRequest,
   parseCookieHeader,
+  createRecoveryCodeForPlayer,
+  redeemRecoveryCode,
+  createRunForPlayer,
+  markRunUsed,
 } from "./player";
 
 async function resetDatabase() {
@@ -74,5 +78,29 @@ describe("anonymous player identity and score APIs", () => {
     expect(firstSummary.highScore).toBe(88);
     expect(secondSummary.highScore).toBe(20);
     expect(firstSummary.highScore).not.toBe(secondSummary.highScore);
+  });
+
+  test("recovery codes can be created and redeemed to bind a new browser", async () => {
+    const first = await ensurePlayerForRequest(new Request("http://localhost/api/me"));
+    const second = await ensurePlayerForRequest(new Request("http://localhost/api/me"));
+
+    const code = await createRecoveryCodeForPlayer(first.player.id);
+    expect(code).toMatch(/^[A-Z0-9-]+$/i);
+
+    const rebound = await redeemRecoveryCode(second.player.id, code);
+    expect(rebound.playerId).toBe(first.player.id);
+    expect(rebound.newToken).toBeTruthy();
+  });
+
+  test("runs are created and marked used once", async () => {
+    const player = await ensurePlayerForRequest(new Request("http://localhost/api/me"));
+    const run = await createRunForPlayer(player.player.id);
+
+    expect(run.id).toBeTruthy();
+    expect(run.used).toBe(false);
+
+    await markRunUsed(run.id);
+    const usedRun = await markRunUsed(run.id);
+    expect(usedRun.used).toBe(true);
   });
 });

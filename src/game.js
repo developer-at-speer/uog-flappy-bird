@@ -16,6 +16,7 @@ var frameCount = 0;
 var HIGH_SCORE_KEY = "flappy.highScore";
 var SCORES_KEY = "flappy.scores";
 var MAX_SAVED_SCORES = 20;
+var currentRunId = null;
 
 function loadHighScore() {
   try {
@@ -26,19 +27,100 @@ function loadHighScore() {
   }
 }
 
-function saveScore(finalPoints) {
-  if (finalPoints > highScore) {
-    highScore = finalPoints;
+function updateHighScore(nextScore) {
+  if (nextScore > highScore) {
+    highScore = nextScore;
   }
+
+  try {
+    localStorage.setItem(HIGH_SCORE_KEY, String(highScore));
+  } catch (e) {
+    // storage unavailable or corrupted; the game still works without persistence
+  }
+}
+
+function saveLocalScore(finalPoints) {
+  updateHighScore(finalPoints);
 
   try {
     var scores = JSON.parse(localStorage.getItem(SCORES_KEY)) || [];
     scores.push(finalPoints);
     localStorage.setItem(SCORES_KEY, JSON.stringify(scores.slice(-MAX_SAVED_SCORES)));
-    localStorage.setItem(HIGH_SCORE_KEY, String(highScore));
   } catch (e) {
     // storage unavailable or corrupted; the game still works without persistence
   }
+}
+
+async function fetchProfile() {
+  try {
+    var response = await fetch("/api/me", {
+      credentials: "same-origin",
+    });
+
+    if (response.ok) {
+      var payload = await response.json();
+      if (typeof payload.highScore === "number") {
+        highScore = Math.max(highScore, payload.highScore);
+      }
+      updateHighScore(highScore);
+    }
+  } catch (e) {
+    // server is unavailable; the game continues with local storage only
+  }
+}
+
+async function startRun() {
+  try {
+    var response = await fetch("/api/runs", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      return;
+    }
+
+    var payload = await response.json();
+    currentRunId = payload.runId || null;
+  } catch (e) {
+    currentRunId = null;
+  }
+}
+
+function saveScore(finalPoints) {
+  saveLocalScore(finalPoints);
+
+  var payload = {
+    points: finalPoints,
+  };
+
+  if (currentRunId) {
+    payload.runId = currentRunId;
+  }
+
+  fetch("/api/scores", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  }).then(async function (response) {
+    if (!response.ok) {
+      return;
+    }
+
+    var result = await response.json();
+    if (typeof result.highScore === "number") {
+      highScore = result.highScore;
+      updateHighScore(highScore);
+    }
+  }).catch(function () {
+    // silently ignore server failures; local storage remains the fallback
+  });
 }
 
 var points = 0;
@@ -57,6 +139,7 @@ function startGame() {
   points = 0;
   gameOver = false;
   started = true;
+  startRun();
 
   if (gameInterval === null) {
     gameInterval = setInterval(gameLoop, 16);
@@ -204,4 +287,5 @@ function draw() {
   ctx.fillText(highScore + ": High-score", canvas.width - 10, 24);
 }
 
+fetchProfile();
 startGame();

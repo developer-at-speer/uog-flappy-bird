@@ -12,6 +12,13 @@ export type PlayerRecord = {
   last_seen_at: Date;
 };
 
+export type RunRecord = {
+  id: string;
+  player_id: string;
+  started_at: Date;
+  used: boolean;
+};
+
 export function parseCookieHeader(cookieHeader: string | null, name: string): string | null {
   if (!cookieHeader) {
     return null;
@@ -45,10 +52,27 @@ function randomToken() {
   return toBase64Url(bytes);
 }
 
-async function hashToken(token: string) {
-  const encoded = new TextEncoder().encode(token);
+function randomRecoveryCode() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let index = 0; index < 10; index++) {
+    code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  }
+  return code;
+}
+
+async function hashBytes(value: string | Uint8Array) {
+  const encoded = typeof value === "string" ? new TextEncoder().encode(value) : value;
   const digest = await crypto.subtle.digest("SHA-256", encoded);
   return new Uint8Array(digest);
+}
+
+async function hashToken(token: string) {
+  return hashBytes(token);
+}
+
+async function hashRecoveryCode(code: string) {
+  return hashBytes(code);
 }
 
 export function buildSessionCookie(token: string) {
@@ -88,14 +112,35 @@ export async function getOrCreatePlayerFromRequest(request: Request) {
     return { player, token };
   }
 
-  const inserted = await sql<PlayerRecord>`
-    INSERT INTO players (token_hash, last_seen_at)
-    VALUES (${tokenHash}, now())
-    RETURNING id, token_hash, created_at, last_seen_at
-  `;
+  try {
+    const inserted = await sql<PlayerRecord>`
+      INSERT INTO players (token_hash, last_seen_at)
+      VALUES (${tokenHash}, now())
+      RETURNING id, token_hash, created_at, last_seen_at
+    `;
 
-  const player = inserted[0];
-  return { player, token };
+    const player = inserted[0];
+    return { player, token };
+  } catch (error) {
+    const duplicateMatch = await sql<PlayerRecord>`
+      SELECT id, token_hash, created_at, last_seen_at
+      FROM players
+      WHERE token_hash = ${tokenHash}
+      LIMIT 1
+    `;
+
+    if (duplicateMatch.length > 0) {
+      const player = duplicateMatch[0];
+      await sql`
+        UPDATE players
+        SET last_seen_at = now()
+        WHERE id = ${player.id}
+      `;
+      return { player, token };
+    }
+
+    throw error;
+  }
 }
 
 export async function ensurePlayerForRequest(request: Request) {
@@ -106,7 +151,7 @@ export async function ensurePlayerForRequest(request: Request) {
     response: Response.json({
       playerId: player.id,
       highScore: 0,
-      recent: []
+      recent: [],
     }, {
       headers: {
         "Set-Cookie": buildSessionCookie(token),
@@ -136,9 +181,36 @@ export async function getPlayerSummary(playerId: string) {
   };
 }
 
-export async function saveScoreForPlayer(playerId: string, points: number) {
+export async function saveScoreForPlayer(
+  playerId: string,
+  points: number,
+  options: { runId?: string } = {},
+) {
   if (!Number.isInteger(points) || points < 0 || points > 10000) {
     throw new Error("points must be an integer between 0 and 10000");
+  }
+
+  if (options.runId) {
+    const run = await sql<RunRecord>`
+      SELECT id, player_id, started_at, used
+      FROM runs
+      WHERE id = ${options.runId} AND player_id = ${playerId}
+      LIMIT 1
+    `;
+
+    if (run.length === 0) {
+      throw new Error("Run not found for this player.");
+    }
+
+    if (run[0].used) {
+      throw new Error("Run has already been used.");
+    }
+
+    await sql`
+      UPDATE runs
+      SET used = true
+      WHERE id = ${options.runId}
+    `;
   }
 
   const lastSubmittedAt = scoreRateLimit.get(playerId) ?? 0;
@@ -155,4 +227,83 @@ export async function saveScoreForPlayer(playerId: string, points: number) {
   `;
 
   return getPlayerSummary(playerId);
+}
+
+export async function createRecoveryCodeForPlayer(playerId: string) {
+  const code = randomRecoveryCode();
+  const hash = await hashRecoveryCode(code);
+
+  await sql`
+    UPDATE players
+    SET recovery_hash = ${hash}
+    WHERE id = ${playerId}
+  `;
+
+  return code;
+}
+
+export async function redeemRecoveryCode(playerId: string, code: string) {
+  const recoveryHash = await hashRecoveryCode(code.trim());
+  const match = await sql<{ id: string }>`
+    SELECT id
+    FROM players
+    WHERE recovery_hash = ${recoveryHash}
+    LIMIT 1
+  `;
+
+  if (match.length === 0) {
+    throw new Error("Recovery code not found or expired.");
+  }
+
+  const newToken = randomToken();
+  const newHash = await hashToken(newToken);
+
+  await sql`
+    UPDATE players
+    SET token_hash = ${newHash}, last_seen_at = now(), recovery_hash = NULL
+    WHERE id = ${playerId}
+  `;
+
+  await sql`
+    UPDATE players
+    SET recovery_hash = NULL
+    WHERE id = ${match[0].id}
+  `;
+
+  return {
+    playerId: match[0].id,
+    newToken,
+  };
+}
+
+export async function createRunForPlayer(playerId: string) {
+  const result = await sql<RunRecord>`
+    INSERT INTO runs (player_id)
+    VALUES (${playerId})
+    RETURNING id, player_id, started_at, used
+  `;
+
+  return result[0];
+}
+
+export async function markRunUsed(runId: string) {
+  const existing = await sql<RunRecord>`
+    SELECT id, player_id, started_at, used
+    FROM runs
+    WHERE id = ${runId}
+    LIMIT 1
+  `;
+
+  if (existing.length === 0) {
+    throw new Error("Run not found.");
+  }
+
+  const result = await sql<RunRecord>`
+    UPDATE runs
+    SET used = true
+    WHERE id = ${runId}
+    RETURNING id, player_id, started_at, used
+  `;
+
+  return result[0] ?? existing[0];
 }
