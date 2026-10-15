@@ -13,7 +13,36 @@ var pipeGap = 180;
 var pipeSpeed = 3;
 var frameCount = 0;
 
+var HIGH_SCORE_KEY = "flappy.highScore";
+var SCORES_KEY = "flappy.scores";
+var MAX_SAVED_SCORES = 20;
+
+function loadHighScore() {
+  try {
+    var saved = parseInt(localStorage.getItem(HIGH_SCORE_KEY), 10);
+    return isNaN(saved) ? 0 : saved;
+  } catch (e) {
+    return 0;
+  }
+}
+
+function saveScore(finalPoints) {
+  if (finalPoints > highScore) {
+    highScore = finalPoints;
+  }
+
+  try {
+    var scores = JSON.parse(localStorage.getItem(SCORES_KEY)) || [];
+    scores.push(finalPoints);
+    localStorage.setItem(SCORES_KEY, JSON.stringify(scores.slice(-MAX_SAVED_SCORES)));
+    localStorage.setItem(HIGH_SCORE_KEY, String(highScore));
+  } catch (e) {
+    // storage unavailable or corrupted; the game still works without persistence
+  }
+}
+
 var points = 0;
+var highScore = loadHighScore();
 var gameOver = false;
 var started = false;
 var canvas = document.getElementById("game");
@@ -108,23 +137,21 @@ function update() {
     if (pipes[i].passed == false && pipes[i].x + pipeWidth < birdX) {
       pipes[i].passed = true;
       points = points + 1;
-      console.log("Points: " + points);
     }
   }
 
   for (var i = 0; i < pipes.length; i++) {
     if (checkCollision(pipes[i]) == true) {
       gameOver = true;
-      console.log("Game over! Final points: " + points);
     }
   }
 
   if (birdY + birdHeight > canvas.height || birdY < 0) {
     gameOver = true;
-    console.log("Game over! Final points: " + points);
   }
 
   if (gameOver == true) {
+    saveScore(points);
     clearInterval(gameInterval);
     gameInterval = null;
   }
@@ -168,6 +195,13 @@ function draw() {
     ctx.font = "16px Arial";
     ctx.fillText("Press space to restart", canvas.width / 2, canvas.height / 2 + 30);
   }
+
+  ctx.fillStyle = "white";
+  ctx.font = "16px Arial";
+  ctx.textAlign = "left";
+  ctx.fillText("Score: " + points, 10, 24);
+  ctx.textAlign = "right";
+  ctx.fillText(highScore + ": High-score", canvas.width - 10, 24);
 }
 
 startGame();
